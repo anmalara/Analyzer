@@ -90,6 +90,20 @@
 
 #include "SimDataFormats/JetMatching/interface/JetFlavourInfoMatching.h"
 
+
+#include "RecoBTag/TrackProbability/interface/HistogramProbabilityEstimator.h"
+
+class HistogramProbabilityEstimator;
+#include <typeinfo>
+
+
+#include "CondFormats/BTauObjects/interface/TrackProbabilityCalibration.h"
+#include "CondFormats/DataRecord/interface/BTagTrackProbability2DRcd.h"
+#include "CondFormats/DataRecord/interface/BTagTrackProbability3DRcd.h"
+#include "FWCore/Framework/interface/EventSetupRecord.h"
+#include "FWCore/Framework/interface/EventSetupRecordImplementation.h"
+#include "FWCore/Framework/interface/EventSetupRecordKey.h"
+
 //
 // class declaration
 //
@@ -135,11 +149,17 @@ class AnalyzerSignedIP_MINIAOD_wArr : public edm::one::EDAnalyzer<edm::one::Shar
       
       std::vector<float> firstHadronInChain(pat::PackedGenParticle gParticle, const reco::Candidate* mother);
       
+      void checkEventSetup(const edm::EventSetup & iSetup);
+      
       edm::Service<TFileService> file;
 //       edm::RefVector<std::vector<pat::PackedGenParticle> > mothers;
 //       reco::Candidate mother;
 
       TTree *tree;
+      std::auto_ptr<HistogramProbabilityEstimator> m_probabilityEstimator;
+      bool m_computeProbabilities=1;
+      unsigned long long  m_calibrationCacheId2D; 
+      unsigned long long m_calibrationCacheId3D;
       
       int count_seeds=0;
       
@@ -188,6 +208,7 @@ class AnalyzerSignedIP_MINIAOD_wArr : public edm::one::EDAnalyzer<edm::one::Shar
       std::vector<float> jet_CMVA;
       std::vector<float> jet_TCHE;
       std::vector<float> jet_SSVHE;
+      std::vector<reco::Jet> Jets;
      
       double jetpt;      
       double jeteta;
@@ -215,6 +236,8 @@ class AnalyzerSignedIP_MINIAOD_wArr : public edm::one::EDAnalyzer<edm::one::Shar
       double seed_3D_signedSip[10];
       double seed_2D_signedIp[10];
       double seed_2D_signedSip[10];
+      double seed_3D_TrackProbability[10];
+      double seed_2D_TrackProbability[10];
       int seed_JetMatch[10];
       
                 
@@ -444,6 +467,8 @@ AnalyzerSignedIP_MINIAOD_wArr::AnalyzerSignedIP_MINIAOD_wArr(const edm::Paramete
     tree->Branch("seed_3D_signedSip", &seed_3D_signedSip, "seed_3D_signedSip[10]/D");
     tree->Branch("seed_2D_signedIp", &seed_2D_signedIp, "seed_2D_signedIp[10]/D");
     tree->Branch("seed_2D_signedSip", &seed_2D_signedSip, "seed_2D_signedSip[10]/D");
+    tree->Branch("seed_3D_TrackProbability", &seed_3D_TrackProbability, "seed_3D_TrackProbability[10]/D");
+    tree->Branch("seed_2D_TrackProbability", &seed_2D_TrackProbability, "seed_2D_TrackProbability[10]/D");
     
     tree->Branch("seed_JetMatch", &seed_JetMatch, "seed_JetMatch[10]/D");
     tree->Branch("seed_chi2reduced",&seed_chi2reduced, "seed_chi2reduced[10]/D");
@@ -566,6 +591,7 @@ void
 AnalyzerSignedIP_MINIAOD_wArr::analyze(const edm::Event& iEvent, const edm::EventSetup& iSetup)
 {
 std::cout <<  " inizio evento  " << std::endl;
+    if (m_computeProbabilities) checkEventSetup(iSetup);
     evt=iEvent.id().event();
     lumi=iEvent.id().luminosityBlock();
     run=iEvent.id().run();
@@ -581,7 +607,8 @@ std::cout <<  " inizio evento  " << std::endl;
     jet_CSVv2.clear();   
     jet_CMVA.clear();   
     jet_TCHE.clear();   
-    jet_SSVHE.clear();   
+    jet_SSVHE.clear();  
+    Jets.clear();
 
 
     using namespace edm;
@@ -656,7 +683,7 @@ std::cout <<  " inizio evento  " << std::endl;
             jet_CMVA.push_back(iter->bDiscriminator("pfCombinedMVAV2BJetTags"));
             jet_TCHE.push_back(iter->bDiscriminator("pfTrackCountingHighEffBJetTags"));
             jet_SSVHE.push_back(iter->bDiscriminator("pfSimpleInclusiveSecondaryVertexHighEffBJetTags"));
-       
+            Jets.push_back(*(iter));
             
             }
             
@@ -773,6 +800,8 @@ std::cout <<  " inizio evento  " << std::endl;
             std::fill_n(seed_nHits, 10, 0.);//seed_nHits.clear();
             std::fill_n(seed_jetAxisDistance, 10, 0.);//seed_jetAxisDistance.clear();
             std::fill_n(seed_jetAxisDlength, 10, 0.);//seed_jetAxisDlength.clear();    
+            std::fill_n(seed_3D_TrackProbability, 10, 0.);
+            std::fill_n(seed_2D_TrackProbability, 10, 0.);
             seed_ClosestJet_dR.clear();            
             seed_MC_MomFlavour.clear();
             seed_MC_MomPdgId.clear();
@@ -1009,6 +1038,28 @@ std::cout <<  " inizio evento  " << std::endl;
             std::cout << "new seed : 2d+3d sign." << ip2d.second.significance() << "  " << ip.second.significance() <<"  "<< std::endl;
             std::cout << "new seed : in jet : " << jet_pt[seed_jet_match_i] <<"  "<<jet_eta[seed_jet_match_i]<<"  "<<jet_phi[seed_jet_match_i]<<"  "<< std::endl;
 
+            if (m_computeProbabilities) {
+                    
+                    
+                    const reco::Track & track = im->second.first->track();
+                    
+                    //probability with 3D ip
+                    
+                    std::pair<bool,double> probability = m_probabilityEstimator->probability(0, 0,ip.second.significance(),track,Jets[seed_jet_match_i],pv);
+                    double prob3D=(probability.first ? probability.second : -1.);
+                    std::cout<<prob3D<<std::endl;
+
+                    //probability with 2D ip
+                    
+                    probability = m_probabilityEstimator->probability(0, 1,ip2d.second.significance(),im->second.first->track(),Jets[seed_jet_match_i],pv);
+                    double prob2D=(probability.first ? probability.second : -1.);
+                    std::cout<<prob2D<<std::endl;
+                    
+                    
+                    seed_3D_TrackProbability[seeds_max_counter]=prob3D;
+                    seed_2D_TrackProbability[seeds_max_counter]=prob2D;
+                 
+            } 
             
             seed_pt[seeds_max_counter]=im->second.first->track().pt();
             seed_eta[seeds_max_counter]=im->second.first->track().eta();
@@ -1852,6 +1903,32 @@ int AnalyzerSignedIP_MINIAOD_wArr::jet_flavour_function(const pat::Jet& jet, boo
     }
 }
 
+void AnalyzerSignedIP_MINIAOD_wArr::checkEventSetup(const edm::EventSetup & iSetup) {
+  using namespace edm;
+  using namespace edm::eventsetup;
+
+   const EventSetupRecord & re2D= iSetup.get<BTagTrackProbability2DRcd>();
+   const EventSetupRecord & re3D= iSetup.get<BTagTrackProbability3DRcd>();
+   unsigned long long cacheId2D= re2D.cacheIdentifier();
+   unsigned long long cacheId3D= re3D.cacheIdentifier();
+
+   if(cacheId2D!=m_calibrationCacheId2D || cacheId3D!=m_calibrationCacheId3D  )  //Calibration changed
+   {
+     //iSetup.get<BTagTrackProbabilityRcd>().get(calib);
+     ESHandle<TrackProbabilityCalibration> calib2DHandle;
+     iSetup.get<BTagTrackProbability2DRcd>().get(calib2DHandle);
+     ESHandle<TrackProbabilityCalibration> calib3DHandle;
+     iSetup.get<BTagTrackProbability3DRcd>().get(calib3DHandle);
+
+     const TrackProbabilityCalibration *  ca2D= calib2DHandle.product();
+     const TrackProbabilityCalibration *  ca3D= calib3DHandle.product();
+
+     m_probabilityEstimator.reset(new HistogramProbabilityEstimator(ca3D,ca2D));
+
+   }
+   m_calibrationCacheId3D=cacheId3D;
+   m_calibrationCacheId2D=cacheId2D;
+}
 
 // ------------ method called once each job just before starting event loop  ------------
 void 
